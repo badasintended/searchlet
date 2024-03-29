@@ -1,0 +1,254 @@
+<!--
+  ~ Copyright 2024 deirn
+  ~
+  ~ Licensed under the Apache License, Version 2.0 (the "License");
+  ~ you may not use this file except in compliance with the License.
+  ~ You may obtain a copy of the License at
+  ~
+  ~     http://www.apache.org/licenses/LICENSE-2.0
+  ~
+  ~ Unless required by applicable law or agreed to in writing, software
+  ~ distributed under the License is distributed on an "AS IS" BASIS,
+  ~ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+  ~ See the License for the specific language governing permissions and
+  ~ limitations under the License.
+  -->
+
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, user-scalable=no, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0">
+  <meta http-equiv="X-UA-Compatible" content="ie=edge">
+  <title>Searchlet</title>
+  <style>
+      :root {
+          --body-font-family: 'DejaVu Sans', Arial, Helvetica, sans-serif;
+          --block-font-family: 'DejaVu Serif', Georgia, "Times New Roman", Times, serif;
+      }
+
+      * {
+          margin: 0;
+      }
+
+      body {
+          min-height: 100vh;
+          font-family: var(--body-font-family);
+      }
+
+      a {
+          text-decoration: none;
+      }
+
+      #container {
+          margin: 0 auto;
+          padding: 0.75rem;
+      }
+
+      #input {
+          width: 30rem;
+      }
+
+      #results-tab-container {
+          margin-top: 1rem;
+          display: flex;
+          gap: 0.375rem;
+      }
+
+      .results-tab {
+          border: none;
+          background-color: #4d7a97;
+          color: #ffffff;
+          padding: 0.375rem;
+          font-weight: bold;
+      }
+
+      .results-tab.active {
+          background-color: #f8981d;
+          color: #000000;
+      }
+
+      #results-container {
+          display: flex;
+          flex-direction: column;
+          gap: 10px;
+      }
+
+      .results {
+          display: flex;
+          flex-direction: column;
+          gap: 1px;
+          border: #eeeeef 1px solid;
+      }
+
+      .result {
+          display: flex;
+          flex-direction: column;
+          gap: 0.375rem;
+          padding: 0.375rem;
+          background-color: #ffffff;
+      }
+
+      .result:nth-child(even) {
+          background-color: #eeeeef;
+      }
+
+      .result > div {
+          font-family: var(--block-font-family);
+      }
+  </style>
+</head>
+<body>
+<div id="container">
+  <h1>Searchlet</h1>
+
+  <div>
+    <label for="input"></label>
+    <input type="text" name="input" id="input">
+    <button id="search" onclick="search()">Search</button>
+  </div>
+
+  <div id="results-tab-container"></div>
+  <div id="results-container"></div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/minisearch@6.3.0/dist/umd/index.min.js"></script>
+<script>
+    const $input = document.getElementById("input");
+    const $resultsTabContainer = document.getElementById("results-tab-container");
+    const $resultsContainer = document.getElementById("results-container");
+    const $search = document.getElementById("search");
+
+    const miniSearch = new MiniSearch({
+        fields: ["key", "body"],
+        storeFields: ["title", "body", "type", "unifier", "link"],
+        searchOptions: {
+            prefix: true,
+            fuzzy: 0.2,
+            boost: {
+                title: 2
+            }
+        },
+    });
+
+    let javadocUrl;
+
+    async function setup() {
+        $resultsContainer.innerText = "Indexing... this might take a while";
+        $input.disabled = true;
+        $search.disabled = true;
+
+        let configRes = await fetch("config.json");
+        let config = await configRes.json();
+        javadocUrl = config.javadocUrl;
+
+        let indexRes = await fetch("index.json");
+        let index = await indexRes.json();
+
+        miniSearch.addAll(index)
+
+        $resultsContainer.innerText = "";
+        $input.disabled = false;
+        $search.disabled = false;
+    }
+
+    function compileHtml(html) {
+        html = html.trim();
+
+        const template = document.createElement("template");
+        template.innerHTML = html;
+        return template.content.children[0];
+    }
+
+    const unsafeHtml = {
+        '&': '&amp;',
+        '<': '&lt;',
+        '>': '&gt;',
+        '"': '&quot;',
+        "'": '&#39;',
+        '/': '&#x2F;',
+        '`': '&#x60;',
+        '=': '&#x3D;'
+    };
+
+    function escapeHtml(str) {
+        return str.replace(/[&<>"'`=\/]/g, (c) => unsafeHtml[c] || c);
+    }
+
+    function search() {
+        $resultsTabContainer.innerHTML = "";
+        $resultsContainer.innerHTML = "";
+
+        let results = miniSearch.search($input.value);
+
+        let categories = {};
+
+        for (let result of results) {
+            if (categories[result.type] === undefined) {
+                // language=html
+                categories[result.type] = {
+                    button: compileHtml(`
+                      <button class="results-tab">${result.type.charAt(0).toUpperCase() + result.type.slice(1) + "s"}</button>
+                    `),
+                    body: compileHtml(`
+                      <div class="results"></div>
+                    `),
+                    unifier: new Set()
+                };
+            }
+
+            const category = categories[result.type];
+
+            if (result.unifier) {
+                const unifier = `${result.key}%${result.unifier}`
+                if (category.unifier.has(unifier)) continue;
+                category.unifier.add(unifier);
+            }
+
+            let summary = "";
+            if (result.body) {
+                // language=html
+                summary = `
+                  <div>${result.body.split(/[.?!][\s}]/, 1)[0] ?? ""}</div>
+                `
+            }
+
+            // language=html
+            category.body.appendChild(compileHtml(`
+              <div class="result">
+                <b><a href="${javadocUrl + "/" + result.link}">${escapeHtml(result.title)}</a></b>
+                ${summary}
+              </div>
+            `));
+        }
+
+        function appendTab(type) {
+            if (categories[type]) {
+                const {button, body} = categories[type];
+                $resultsTabContainer.appendChild(button);
+
+                button.addEventListener("click", function () {
+                    for (const child of $resultsTabContainer.children) {
+                        child.classList.remove("active");
+                    }
+
+                    $resultsContainer.innerHTML = "";
+                    $resultsContainer.appendChild(body);
+                    button.classList.add("active");
+                })
+            }
+        }
+
+        appendTab("module")
+        appendTab("package")
+        appendTab("type")
+        appendTab("method")
+        appendTab("variable")
+
+        $resultsTabContainer.children[0]?.click()
+    }
+
+    setup();
+</script>
+</body>
+</html>
